@@ -13,14 +13,14 @@
 # WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 # ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-#                                                                             
-# PURPOSE: This module was created to serve several functions inhereted from  
-#          the DBIx and SQL::Abstract modules ...                              
-#                                                                             
-# USAGE: To read the HOW TO USE instructions you need to run perldoc:         
-#                                                                             
-#        perldoc DBIx::SQL::Abstract                                           
 #
+
+# PURPOSE: This module was created to serve several functions inhereted 
+#          from the DBIx and SQL::Abstract modules ... 
+#
+# USAGE: To read the HOW TO USE instructions you need to run perldoc:
+#        perldoc DBIx::SQL::Abstract
+
 
 package DBIx::SQL::Abstract;
 use strict;
@@ -32,79 +32,71 @@ use DBI;
 use vars qw(@ISA);
 require Exporter;
 @ISA = qw(DBI DBI::db DBI::st SQL::Abstract);
-# Items to export into callers namespace by default. Note: do not export
-# names by default without a very good reason. Use EXPORT_OK instead.
-# Do not simply export all your public functions/methods/constants.
-# This allows declaration	use DBIx::SQL::Abstract ':all';
-# If you do not need this, moving things directly into @EXPORT or @EXPORT_OK
-# will save memory.
-our %EXPORT_TAGS = ( 'all' => [ qw( insert ) ] );
 
-our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
-
-our @EXPORT = qw( );
-
-our $VERSION = '0.01';
+our $VERSION = '0.07';
 
 sub new {
-    my ($class, %params) = @_;
-    # Setting the DBIx and database default parameters
-    my $dbi = { PrintError => 1,
-		RaiseError => 0,
-		AutoCommit => 0,
-		ChopBlanks => 1
-		      };
+    my $class = shift;
+    my %params = @_;
 
+    # Setting the DBIx and database default parameters
     my $db = { driver => 'Pg',
 	       dbname => 'db',
 	       host => undef,
 	       port => undef,
 	       user => 'user',
-	       passwd => undef
-	       };
+	       passwd => undef,
+	       attr => undef, # Used for DBI attributes
+	   };
+    
+    # Setting the DBIx and database default attributes
+    my $dbiattr = { PrintError => 1,
+		    RaiseError => 0,
+		    AutoCommit => 0,
+		    ChopBlanks => 1
+		    };
+    my $knownargs = join ('|', keys %$db); 
 
-    # Checking for wrong params...
-    # if you don't give us any arguments we'll use the default params
-    my $params_ok = 0;
-    my ($dbLine, @dbargs);
-    if ( scalar @_ == 1 ) {
-	$dbLine = "dbi:$db->{dbd}:dbname='$db->{dbname}'";
-	push @dbargs, $dbLine, $db->{dbuser}, $db->{dbpasswd};
-	$params_ok = 1;
-    } elsif (scalar @_ % 2) { 
-	# Checking if the parameter list is a hash with the form: 
-	# param => value";
-	my @wrongkeys;
-	for my $key (keys %params) {
-	    if (exists $dbi->{$key} && defined $params{$key} ) {
-		$dbi->{$key} = $params{$key}; 
-	    } elsif (exists $db->{$key} ) {
-		$db->{$key} = $params{$key};
+    # Checking for 2 explicit options in the arguments
+    if ( $#_ >= 3 ) { 
+	# Checking if here we had unknown arguments
+	my @unknownargs = grep { $_ !~ /^($knownargs)$/ } keys %params;
+	
+	if ( ! @unknownargs ) {
+	    
+	    # Checking for the existence of explicit args: dbname && user
+	    my @minargs = map { $_ =~ /^(dbname|user)$/ } keys %params;
+	    if ( $#minargs == 1) {
+
+		# Setting the arguments for the database connection
+		map { $db->{$_} = $params{$_} } keys %params;
+		my ($dbLine, @dbargs);
+		$dbLine = "dbi:$db->{driver}:dbname='$db->{dbname}'";
+		push @dbargs, $dbLine, $db->{user}, $db->{passwd};
+		
+		# Setting the DBI Attributes
+		if  ( $db->{attr} ) {
+		    my $attr = $db->{attr}; #used only for a better style
+		    map { $dbiattr->{$_} = $attr->{$_} } keys %$attr;
+		}
+		
+		# Here, All is Right, we'll open the database connection
+		my $dbh = DBI->connect(@dbargs, \%$dbiattr) or
+		    die ("Failed to open database connection:\n", 
+			 $DBI::errstr);
+		
+		return bless $dbh, $class;
+		
 	    } else {
-		push @wrongkeys, $key;
+		die 'You need the DSN options: [dbname | user]';
 	    }
-	}
-	if ( $#wrongkeys < 0 ) {
-	    $dbLine = "dbi:$db->{dbd}:dbname='$db->{dbname}'";
-	    push @dbargs, $dbLine, $db->{dbuser}, $db->{dbpasswd};
-	    $params_ok = 1;
+	    
 	} else {
-	    carp 'DB: The next options were found wrong: '
-		. join (', ', @wrongkeys)  . "\n";
+	    die 'Unknown argument(s) received: ', join(', ', @unknownargs);
 	}
 	
     } else {
-	return undef;
-    }
-    
-    # Opening the database connection and returning the dbh object builded
-    if ( $params_ok ) {
-
-	my $dbh = DBI->connect(@dbargs, \%$dbi) or
- 	    die ("Failed to open database connection:\n", $DBI::errstr) &&
-	    return undef;
-
-	return bless $dbh, $class;
+	die 'You need the DSN options: dbname => DBNAME, user => USER';
     }
 }
 
@@ -113,13 +105,16 @@ sub DESTROY {
     # If we are not in autocommit mode, roll back any transactions left
     # pending. Cleanly disconnect from the database before disappearing.
     my $self = shift;
+
     if (ref $self ) {
-	if ($self->{AutoCommit} == 1 ) {
-	    $self->commit;
-	} else {
-	    $self->rollback;
-	}
+  	if ($self->{AutoCommit} == 1 ) {
+  	    $self->commit;
+  	} else {
+  	    $self->rollback;
+  	}
     }
+
+    return 1;
 }
 
 
@@ -226,4 +221,6 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 =cut
+
+
 
